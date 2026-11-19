@@ -115,6 +115,36 @@ alter publication supabase_realtime add table public.checklist_items;
 alter publication supabase_realtime add table public.messages;
 alter publication supabase_realtime add table public.activity;
 
+-- FIX 2026-11-19: las políticas NO deben consultar public.profiles directamente
+-- (eso causaba "infinite recursion detected", Postgres 42P17, y TODAS las
+-- lecturas fallaban con HTTP 500). Estas funciones SECURITY DEFINER pasan por
+-- encima de RLS y son las que usan las políticas. El fix ya se aplicó en vivo
+-- en el proyecto lf-venue-master con fix_rls_recursion.sql; NO re-correr este
+-- schema en ese proyecto.
+create or replace function public.is_active_user()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and active = true
+  );
+$$;
+
+create or replace function public.is_master_user()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'master' and active = true
+  );
+$$;
+
 -- RLS: solo usuarios con sesión y perfil activo ven y editan los datos del equipo.
 -- (El service role de las API routes pasa por encima de RLS.)
 alter table public.profiles enable row level security;
@@ -129,30 +159,41 @@ alter table public.messages enable row level security;
 alter table public.activity enable row level security;
 
 create policy "perfil activo ve perfiles" on public.profiles
-  for select using (auth.uid() is not null and exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for select using (public.is_active_user());
 create policy "usuario actualiza su perfil" on public.profiles
   for update using (auth.uid() = id);
 
 create policy "equipo activo gestiona eventos" on public.events
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo gestiona horarios" on public.schedules
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo gestiona contactos" on public.contacts
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo gestiona crew" on public.event_crew
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo gestiona rider" on public.rider_items
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo gestiona checklist" on public.checklist_items
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo lee y escribe mensajes" on public.messages
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo ve actividad" on public.activity
-  for all using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for all using (public.is_active_user());
 create policy "equipo activo registra actividad" on public.activity
-  for insert with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.active = true));
+  for insert with check (public.is_active_user());
 
 -- Invitaciones: solo el master las lee desde el cliente; la creación y el
 -- canje van por API routes con service role.
 create policy "master ve invitaciones" on public.invites
-  for select using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'master' and p.active = true));
+  for select using (public.is_master_user());
+
+-- Permisos de tabla (FIX 2026-11-19): las tablas se crearon con SQL directo,
+-- que NO otorga permisos automáticamente (eso solo lo hace el Table Editor).
+-- Sin estos GRANT, anon/authenticated recibían 42501 "permission denied" y la
+-- app no podía leer nada aunque RLS lo permitiera. Ya aplicado en vivo con
+-- fix_grants.sql; NO re-correr este schema en el proyecto lf-venue-master.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to anon, authenticated;
+grant usage, select on all sequences in schema public to anon, authenticated;
+alter default privileges for role postgres in schema public grant select, insert, update, delete on tables to anon, authenticated;
+alter default privileges for role postgres in schema public grant usage, select on sequences to anon, authenticated;
