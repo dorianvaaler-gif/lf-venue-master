@@ -93,8 +93,10 @@ label.lbl { font-size: 13px; font-weight: 700; color: var(--muted); display: blo
 table.rider { width: 100%; border-collapse: collapse; font-size: 14px; }
 table.rider th { text-align: left; font-size: 12px; color: var(--muted); padding: 8px 6px; border-bottom: 1px solid var(--line); }
 table.rider td { padding: 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-table.rider input { width: 100%; border: none; background: transparent; padding: 6px 2px; font-size: 14px; outline: none; }
+table.rider input { width: 100%; border: none; background: transparent; padding: 10px 4px; font-size: 16px; min-height: 44px; outline: none; }
 table.rider input:focus { background: var(--accent-soft); border-radius: 6px; }
+.card.rider-card { border: 2px solid var(--accent); }
+.card.rider-card h2 { color: var(--accent-dark); }
 .check { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .check:last-child { border-bottom: none; }
 .check .txt { flex: 1; font-size: 15px; }

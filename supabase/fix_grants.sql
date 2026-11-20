@@ -6,8 +6,8 @@
 -- La recursión (fix_rls_recursion.sql) ya estaba corregida; faltaba esto.
 -- Aplicar UNA SOLA VEZ en el SQL Editor de Supabase (proyecto lf-venue-master).
 
-grant usage on schema public to anon, authenticated;
-grant select, insert, update, delete on all tables in schema public to anon, authenticated;
-grant usage, select on all sequences in schema public to anon, authenticated;
-alter default privileges for role postgres in schema public grant select, insert, update, delete on tables to anon, authenticated;
-alter default privileges for role postgres in schema public grant usage, select on sequences to anon, authenticated;
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public to anon, authenticated, service_role;
+grant usage, select on all sequences in schema public to anon, authenticated, service_role;
+alter default privileges for role postgres in schema public grant select, insert, update, delete on tables to anon, authenticated, service_role;
+alter default privileges for role postgres in schema public grant usage, select on sequences to anon, authenticated, service_role;

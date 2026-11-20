@@ -8,7 +8,7 @@ const TERMS = [
   { t: "Instalación.", b: "LF-Venue funciona en iPhone y Android, sin copiar ni pegar links. No se descarga ningún archivo aparte: la instala tu navegador (Safari en iPhone, Chrome en Android) y su icono queda en tu pantalla de inicio." },
   { t: "Derechos de autor · Idea, nombre e imagen.", b: "LF-Venue, su idea, su nombre, su imagen / icono, su diseño y su contenido son propiedad exclusiva de LF Venue y están protegidos por derechos de autor." },
   { t: "Prohibido copiar.", b: "Queda prohibido copiar, replicar, reproducir, distribuir, modificar, vender o plagiar, total o parcialmente, la app, su nombre, su imagen o su idea, sin autorización escrita de LF Venue. El uso no autorizado constituye una infracción a los derechos de autor." },
-  { t: "Versión Master.", b: "Los datos se sincronizan en tiempo real entre los teléfonos del equipo, con mensajería interna por proyecto. Solo el master ve Equipo y puede activar o desactivar personal; si te desactiva, tu sesión se cierra y no puedes entrar hasta que te reactive." },
+  { t: "Versión Master.", b: "Los datos se sincronizan en tiempo real entre los teléfonos del equipo, con mensajería interna por proyecto. Solo el master ve Equipo y puede activar o desactivar personal; si te desactiva, su sesión se cierra y no puedes entrar hasta que te reactive." },
   { t: "Sin fotos, sin ubicación, sin respaldo.", b: "LF-Venue no usa cámara ni fotos, no guarda ubicación y no tiene respaldo si se pierde el teléfono." },
 ];
 
@@ -42,6 +42,182 @@ function ring() {
       o.start(ctx.currentTime + i * 0.12); o.stop(ctx.currentTime + i * 0.12 + 0.55);
     });
   } catch (e) { /* sin sonido, no pasa nada */ }
+}
+
+// Campo con estado local: se escribe sin interrupciones y se guarda al salir
+// del campo. Antes cada tecla guardaba en la base y recargaba el detalle,
+// y el teclado se cerraba. Es un componente de nivel de módulo (identidad
+// estable) para que React no lo desmonte en cada render.
+function Field({ value, onSave, placeholder, type, rows, className = "input", style, inputMode, autoCapitalize }) {
+  const ref = useRef(null);
+  const [val, setVal] = useState(value || "");
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setVal(value || "");
+  }, [value]);
+  const save = () => { if ((val || "") !== (value || "")) onSave(val); };
+  if (rows) {
+    return (
+      <textarea ref={ref} className={className} rows={rows} value={val}
+        placeholder={placeholder} style={style}
+        onChange={(e) => setVal(e.target.value)} onBlur={save} />
+    );
+  }
+  return (
+    <input ref={ref} className={className} type={type || "text"} value={val}
+      placeholder={placeholder} style={style} inputMode={inputMode} autoCapitalize={autoCapitalize}
+      onChange={(e) => setVal(e.target.value)} onBlur={save}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+  );
+}
+
+// Formulario del SHOW. Vive fuera de Home para que su identidad sea estable:
+// antes estaba definido dentro de Home y React lo desmontaba en cada render,
+// lo que cerraba el teclado al escribir.
+function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, onSaveEventField, onLogActivity, onConfirm, onDeleteEvent, onReloadDetail }) {
+  const ev = detail?.event;
+  if (!ev || !detail) return null;
+  const d = detail;
+  const totalPiezas = d.rider.reduce((a, r) => a + (parseInt(r.cantidad, 10) || 0), 0);
+  return (
+    <div>
+      <div className="row">
+        <button className="btn ghost" onClick={onClose}>← Volver a shows</button>
+      </div>
+      <div className="card">
+        <h2>Datos del SHOW</h2>
+        <label className="lbl">Nombre del SHOW</label>
+        <Field value={ev.name || ""} onSave={(v) => onSaveEventField(ev, { name: v })} />
+        <label className="lbl">Fecha del SHOW (para ver cuántos días faltan)</label>
+        <Field type="date" value={ev.event_date || ""} onSave={(v) => onSaveEventField(ev, { event_date: v })} />
+        <div className="kv"><span>Fecha</span><b>{fmtDate(ev.event_date)}</b></div>
+        <div className="kv"><span>Faltan</span><b>{daysLeft(ev.event_date) === null ? "—" : daysLeft(ev.event_date) === 0 ? "Hoy" : daysLeft(ev.event_date) > 0 ? daysLeft(ev.event_date) + " días" : "Pasó hace " + Math.abs(daysLeft(ev.event_date)) + " días"}</b></div>
+        <div className="kv"><span>Rider</span><b>{d.rider.length} equipos</b></div>
+        <div className="kv"><span>Crew</span><b>{d.crew.length} personas</b></div>
+        <label className="lbl">Call general · llegada</label>
+        <Field value={ev.call_time || ""} placeholder="Ej. 14:00" onSave={(v) => onSaveEventField(ev, { call_time: v })} />
+        <label className="lbl">Show · horario</label>
+        <Field value={ev.show_time || ""} placeholder="Ej. 21:00" onSave={(v) => onSaveEventField(ev, { show_time: v })} />
+        <label className="lbl">Responsable</label>
+        <Field value={ev.responsible || ""} placeholder="¿Quién responde?" onSave={(v) => onSaveEventField(ev, { responsible: v })} />
+      </div>
+
+      <div className="card rider-card">
+        <h2>Rider técnico de este SHOW · {d.rider.length} equipos</h2>
+        <p>Toca cualquier celda y escribe: cantidad de piezas, modelo del equipo y en Otros la nota que haga falta. Se guarda solo al salir de la celda.</p>
+        <div className="kv"><span>Total de piezas</span><b>{totalPiezas}</b></div>
+        <table className="rider">
+          <thead><tr><th>Cantidad</th><th>Modelo</th><th>Otros</th><th></th></tr></thead>
+          <tbody>
+            {d.rider.map((r) => (
+              <tr key={r.id}>
+                <td><Field className="" value={r.cantidad || ""} onSave={async (v) => { await sb.from("rider_items").update({ cantidad: v }).eq("id", r.id); }} /></td>
+                <td><Field className="" value={r.modelo || ""} onSave={async (v) => { await sb.from("rider_items").update({ modelo: v }).eq("id", r.id); }} /></td>
+                <td><Field className="" value={r.otros || ""} onSave={async (v) => { await sb.from("rider_items").update({ otros: v }).eq("id", r.id); }} /></td>
+                <td><button className="btn ghost" onClick={async () => { await sb.from("rider_items").delete().eq("id", r.id); onReloadDetail(); }}>✕</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <button className="btn secondary block" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "", otros: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
+      </div>
+
+      <div className="card">
+        <h2>Horarios del día</h2>
+        <p>Toca el botón para cambiar el estado</p>
+        {d.schedules.map((s) => (
+          <div className="check" key={s.id}>
+            <Field style={{ margin: 0 }} value={s.time || ""} placeholder="Hora" onSave={async (v) => { await sb.from("schedules").update({ time: v }).eq("id", s.id); }} />
+            <Field style={{ margin: 0, flex: 2 }} value={s.label || ""} placeholder="¿Qué pasa a esa hora?" onSave={async (v) => { await sb.from("schedules").update({ label: v }).eq("id", s.id); }} />
+            <button className="btn ghost" onClick={async () => { await sb.from("schedules").delete().eq("id", s.id); onReloadDetail(); }}>✕</button>
+          </div>
+        ))}
+        <button className="btn secondary small" onClick={async () => { await sb.from("schedules").insert({ event_id: ev.id, label: "", time: "", sort: d.schedules.length }); onReloadDetail(); }}>+ Agregar horario</button>
+      </div>
+
+      <div className="card">
+        <h2>Anotaciones</h2>
+        <p>Lo importante del SHOW</p>
+        <Field rows={4} value={ev.notes || ""} placeholder="Escribe aquí…" onSave={(v) => onSaveEventField(ev, { notes: v })} />
+      </div>
+
+      <div className="card">
+        <h2>Contactos clave</h2>
+        <p>¿A quién llamas?</p>
+        {d.contacts.map((c) => (
+          <div className="check" key={c.id}>
+            <Field style={{ margin: 0 }} value={c.name || ""} placeholder="Nombre" onSave={async (v) => { await sb.from("contacts").update({ name: v }).eq("id", c.id); }} />
+            <Field style={{ margin: 0 }} value={c.phone || ""} placeholder="Teléfono" onSave={async (v) => { await sb.from("contacts").update({ phone: v }).eq("id", c.id); }} />
+            <button className="btn ghost" onClick={async () => { await sb.from("contacts").delete().eq("id", c.id); onReloadDetail(); }}>✕</button>
+          </div>
+        ))}
+        <button className="btn secondary small" onClick={async () => { await sb.from("contacts").insert({ event_id: ev.id, name: "", phone: "" }); onReloadDetail(); }}>+ Agregar contacto</button>
+      </div>
+
+      <div className="card">
+        <h2>Crew de este SHOW · {d.crew.length} personas</h2>
+        <p>Escribe nombre y rol de cada quien.</p>
+        {d.crew.map((c) => (
+          <div className="check" key={c.id}>
+            <Field style={{ margin: 0 }} value={c.name || ""} placeholder="Nombre" onSave={async (v) => { await sb.from("event_crew").update({ name: v }).eq("id", c.id); }} />
+            <Field style={{ margin: 0 }} value={c.role || ""} placeholder="Rol" onSave={async (v) => { await sb.from("event_crew").update({ role: v }).eq("id", c.id); }} />
+            <button className="btn ghost" onClick={async () => { await sb.from("event_crew").delete().eq("id", c.id); onLogActivity(ev.id, "quitó a alguien del crew"); onReloadDetail(); }}>✕</button>
+          </div>
+        ))}
+        <button className="btn secondary small" onClick={async () => { await sb.from("event_crew").insert({ event_id: ev.id, name: "", role: "" }); onReloadDetail(); }}>+ Agregar persona al crew</button>
+      </div>
+
+      <div className="card">
+        <h2>Checklist de carga · {d.checklist.filter((c) => c.status === "hecho").length} de {d.checklist.length} hechos</h2>
+        <p>Toca el botón de estado de cada paso para avanzarlo: Pendiente → En curso → Hecho.</p>
+        {d.checklist.map((c) => (
+          <div className="check" key={c.id}>
+            <Field style={{ margin: 0, flex: 1 }} value={c.text || ""} placeholder="Paso…" onSave={async (v) => { await sb.from("checklist_items").update({ text: v }).eq("id", c.id); }} />
+            <button className={"statusbtn " + (c.status === "hecho" ? "hecho" : c.status === "en_curso" ? "curso" : "")}
+              onClick={async () => {
+                const next = c.status === "pendiente" ? "en_curso" : c.status === "en_curso" ? "hecho" : "pendiente";
+                await sb.from("checklist_items").update({ status: next }).eq("id", c.id); onReloadDetail();
+              }}>
+              {c.status === "pendiente" ? "Pendiente" : c.status === "en_curso" ? "En curso" : "Hecho"}
+            </button>
+            <button className="btn ghost" onClick={async () => { await sb.from("checklist_items").delete().eq("id", c.id); onReloadDetail(); }}>✕</button>
+          </div>
+        ))}
+        <button className="btn secondary small" onClick={async () => { await sb.from("checklist_items").insert({ event_id: ev.id, text: "", status: "pendiente", sort: d.checklist.length }); onReloadDetail(); }}>+ Agregar paso</button>
+      </div>
+
+      <div className="card">
+        <h2>Mensajes · {ev.name}</h2>
+        <p>Chat interno del equipo para este proyecto. Se sincroniza en tiempo real.</p>
+        {d.messages.length === 0 && <p>Sin mensajes todavía. Escribe el primero.</p>}
+        {d.messages.map((m) => (
+          <div className="msg" key={m.id}>
+            <div className="who">{m.author_name}</div>
+            <div className="body">{m.body}</div>
+            <div className="when">{fmtTime(m.created_at)}</div>
+          </div>
+        ))}
+        <div className="row">
+          <input className="input" style={{ margin: 0, flex: 1 }} value={msgText} onChange={(e) => setMsgText(e.target.value)} placeholder="Escribe un mensaje…" onKeyDown={(e) => { if (e.key === "Enter") onSendMessage(); }} />
+          <button className="btn" onClick={onSendMessage}>Enviar</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Tu actividad</h2>
+        <p>Tus últimos cambios</p>
+        {d.activity.length === 0 && <p>Sin actividad todavía.</p>}
+        {d.activity.map((a) => (
+          <div className="kv" key={a.id}><b>{a.author_name}</b><span>{a.text} · {fmtTime(a.created_at)}</span></div>
+        ))}
+      </div>
+
+      <div className="row" style={{ marginTop: 4 }}>
+        <button className="btn ghost" onClick={onClose}>← Volver a shows</button>
+        <div className="spacer" />
+        <button className="btn danger small" onClick={() => onConfirm({ title: "¿Borrar este SHOW?", text: "Se borra el SHOW con su ficha, rider, crew, checklist y mensajes. No se puede recuperar.", onYes: () => onDeleteEvent(ev) })}>Borrar SHOW</button>
+      </div>
+    </div>
+  );
 }
 
 export default function Home() {
@@ -243,7 +419,7 @@ export default function Home() {
     if (!sb) return;
     setBusy(true);
     const { data, error } = await sb.from("events").insert({
-      name: "Nuevo evento", event_date: new Date().toISOString().slice(0, 10),
+      name: "Nuevo SHOW", event_date: new Date().toISOString().slice(0, 10),
       call_time: "", show_time: "", responsible: "", notes: "", created_by: user?.id,
     }).select().single();
     setBusy(false);
@@ -259,12 +435,12 @@ export default function Home() {
       show_time: f.show_time, responsible: f.responsible, notes: f.notes, created_by: user?.id,
     }).select().single();
     if (error) { say("No se pudo copiar"); return; }
-    await loadEvents(); setOpenEvent(data); say("Evento copiado");
+    await loadEvents(); setOpenEvent(data); say("SHOW copiado");
   }
   async function deleteEvent(ev) {
     if (!sb) return;
     await sb.from("events").delete().eq("id", ev.id);
-    setOpenEvent(null); setDetail(null); await loadEvents(); say("Evento borrado");
+    setOpenEvent(null); setDetail(null); await loadEvents(); say("SHOW borrado");
   }
   function filteredEvents() {
     const q = search.trim().toLowerCase();
@@ -434,8 +610,8 @@ export default function Home() {
             <div className="steps">
               <b>iPhone (Safari):</b><br />
               1 · Abre esta app en Safari.<br />
-              2 · Toca <b>···</b> junto a la dirección, abajo.<br />
-              3 · Compartir → <b>Añadir a pantalla de inicio</b> → Añadir.<br /><br />
+              2 · Toca el botón <b>≡</b> dentro de la píldora de la dirección, abajo.<br />
+              3 · Toca <b>Agregar a Inicio</b> → <b>Añadir</b>.<br /><br />
               <b>Android (Chrome):</b><br />
               Menú → <b>Instalar app</b> / Añadir a pantalla de inicio.
             </div>
@@ -460,151 +636,6 @@ export default function Home() {
   const isMaster = profile?.role === "master";
   const list = filteredEvents();
 
-  function EventForm() {
-    const ev = detail?.event;
-    if (!ev || !detail) return null;
-    const d = detail;
-    return (
-      <div>
-        <div className="row">
-          <button className="btn ghost" onClick={() => { setOpenEvent(null); setDetail(null); }}>← Volver a eventos</button>
-        </div>
-        <div className="card">
-          <h2>Datos del evento</h2>
-          <label className="lbl">Nombre del evento</label>
-          <input className="input" value={ev.name || ""} onChange={(e) => saveEventField(ev, { name: e.target.value })} />
-          <label className="lbl">Fecha del evento (para ver cuántos días faltan)</label>
-          <input className="input" type="date" value={ev.event_date || ""} onChange={(e) => saveEventField(ev, { event_date: e.target.value })} />
-          <div className="kv"><span>Fecha</span><b>{fmtDate(ev.event_date)}</b></div>
-          <div className="kv"><span>Faltan</span><b>{daysLeft(ev.event_date) === null ? "—" : daysLeft(ev.event_date) === 0 ? "Hoy" : daysLeft(ev.event_date) > 0 ? daysLeft(ev.event_date) + " días" : "Pasó hace " + Math.abs(daysLeft(ev.event_date)) + " días"}</b></div>
-          <div className="kv"><span>Rider</span><b>{d.rider.length} equipos</b></div>
-          <div className="kv"><span>Crew</span><b>{d.crew.length} personas</b></div>
-          <label className="lbl">Call general · llegada</label>
-          <input className="input" value={ev.call_time || ""} onChange={(e) => saveEventField(ev, { call_time: e.target.value })} placeholder="Ej. 14:00" />
-          <label className="lbl">Show · horario</label>
-          <input className="input" value={ev.show_time || ""} onChange={(e) => saveEventField(ev, { show_time: e.target.value })} placeholder="Ej. 21:00" />
-          <label className="lbl">Responsable</label>
-          <input className="input" value={ev.responsible || ""} onChange={(e) => saveEventField(ev, { responsible: e.target.value })} placeholder="¿Quién responde?" />
-        </div>
-
-        <div className="card">
-          <h2>Horarios del día</h2>
-          <p>Toca el botón para cambiar el estado</p>
-          {d.schedules.map((s) => (
-            <div className="check" key={s.id}>
-              <input className="input" style={{ margin: 0 }} value={s.time || ""} placeholder="Hora" onChange={async (e) => { await sb.from("schedules").update({ time: e.target.value }).eq("id", s.id); loadDetail(ev); }} />
-              <input className="input" style={{ margin: 0, flex: 2 }} value={s.label || ""} placeholder="¿Qué pasa a esa hora?" onChange={async (e) => { await sb.from("schedules").update({ label: e.target.value }).eq("id", s.id); loadDetail(ev); }} />
-              <button className="btn ghost" onClick={async () => { await sb.from("schedules").delete().eq("id", s.id); loadDetail(ev); }}>✕</button>
-            </div>
-          ))}
-          <button className="btn secondary small" onClick={async () => { await sb.from("schedules").insert({ event_id: ev.id, label: "", time: "", sort: d.schedules.length }); loadDetail(ev); }}>+ Agregar horario</button>
-        </div>
-
-        <div className="card">
-          <h2>Anotaciones</h2>
-          <p>Lo importante del evento</p>
-          <textarea className="input" rows={4} value={ev.notes || ""} onChange={(e) => saveEventField(ev, { notes: e.target.value })} placeholder="Escribe aquí…" />
-        </div>
-
-        <div className="card">
-          <h2>Contactos clave</h2>
-          <p>¿A quién llamas?</p>
-          {d.contacts.map((c) => (
-            <div className="check" key={c.id}>
-              <input className="input" style={{ margin: 0 }} value={c.name || ""} placeholder="Nombre" onChange={async (e) => { await sb.from("contacts").update({ name: e.target.value }).eq("id", c.id); loadDetail(ev); }} />
-              <input className="input" style={{ margin: 0 }} value={c.phone || ""} placeholder="Teléfono" onChange={async (e) => { await sb.from("contacts").update({ phone: e.target.value }).eq("id", c.id); loadDetail(ev); }} />
-              <button className="btn ghost" onClick={async () => { await sb.from("contacts").delete().eq("id", c.id); loadDetail(ev); }}>✕</button>
-            </div>
-          ))}
-          <button className="btn secondary small" onClick={async () => { await sb.from("contacts").insert({ event_id: ev.id, name: "", phone: "" }); loadDetail(ev); }}>+ Agregar contacto</button>
-        </div>
-
-        <div className="card">
-          <h2>Crew de este evento · {d.crew.length} personas</h2>
-          <p>Escribe nombre y rol de cada quien.</p>
-          {d.crew.map((c) => (
-            <div className="check" key={c.id}>
-              <input className="input" style={{ margin: 0 }} value={c.name || ""} placeholder="Nombre" onChange={async (e) => { await sb.from("event_crew").update({ name: e.target.value }).eq("id", c.id); loadDetail(ev); }} />
-              <input className="input" style={{ margin: 0 }} value={c.role || ""} placeholder="Rol" onChange={async (e) => { await sb.from("event_crew").update({ role: e.target.value }).eq("id", c.id); loadDetail(ev); }} />
-              <button className="btn ghost" onClick={async () => { await sb.from("event_crew").delete().eq("id", c.id); logActivity(ev.id, "quitó a alguien del crew"); loadDetail(ev); }}>✕</button>
-            </div>
-          ))}
-          <button className="btn secondary small" onClick={async () => { await sb.from("event_crew").insert({ event_id: ev.id, name: "", role: "" }); loadDetail(ev); }}>+ Agregar persona al crew</button>
-        </div>
-
-        <div className="card">
-          <h2>Rider técnico de este evento · {d.rider.length} equipos</h2>
-          <p>Toca cualquier celda y escribe: cantidad de piezas, modelo del equipo y en Otros la nota que haga falta.</p>
-          <table className="rider">
-            <thead><tr><th>Cantidad</th><th>Modelo</th><th>Otros</th><th></th></tr></thead>
-            <tbody>
-              {d.rider.map((r) => (
-                <tr key={r.id}>
-                  <td><input value={r.cantidad || ""} onChange={async (e) => { await sb.from("rider_items").update({ cantidad: e.target.value }).eq("id", r.id); loadDetail(ev); }} /></td>
-                  <td><input value={r.modelo || ""} onChange={async (e) => { await sb.from("rider_items").update({ modelo: e.target.value }).eq("id", r.id); loadDetail(ev); }} /></td>
-                  <td><input value={r.otros || ""} onChange={async (e) => { await sb.from("rider_items").update({ otros: e.target.value }).eq("id", r.id); loadDetail(ev); }} /></td>
-                  <td><button className="btn ghost" onClick={async () => { await sb.from("rider_items").delete().eq("id", r.id); loadDetail(ev); }}>✕</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button className="btn secondary small" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "", otros: "" }); loadDetail(ev); }}>+ Agregar equipo</button>
-        </div>
-
-        <div className="card">
-          <h2>Checklist de carga · {d.checklist.filter((c) => c.status === "hecho").length} de {d.checklist.length} hechos</h2>
-          <p>Toca el botón de estado de cada paso para avanzarlo: Pendiente → En curso → Hecho.</p>
-          {d.checklist.map((c) => (
-            <div className="check" key={c.id}>
-              <input className="input" style={{ margin: 0, flex: 1 }} value={c.text || ""} placeholder="Paso…" onChange={async (e) => { await sb.from("checklist_items").update({ text: e.target.value }).eq("id", c.id); loadDetail(ev); }} />
-              <button className={"statusbtn " + (c.status === "hecho" ? "hecho" : c.status === "en_curso" ? "curso" : "")}
-                onClick={async () => {
-                  const next = c.status === "pendiente" ? "en_curso" : c.status === "en_curso" ? "hecho" : "pendiente";
-                  await sb.from("checklist_items").update({ status: next }).eq("id", c.id); loadDetail(ev);
-                }}>
-                {c.status === "pendiente" ? "Pendiente" : c.status === "en_curso" ? "En curso" : "Hecho"}
-              </button>
-              <button className="btn ghost" onClick={async () => { await sb.from("checklist_items").delete().eq("id", c.id); loadDetail(ev); }}>✕</button>
-            </div>
-          ))}
-          <button className="btn secondary small" onClick={async () => { await sb.from("checklist_items").insert({ event_id: ev.id, text: "", status: "pendiente", sort: d.checklist.length }); loadDetail(ev); }}>+ Agregar paso</button>
-        </div>
-
-        <div className="card">
-          <h2>Mensajes · {ev.name}</h2>
-          <p>Chat interno del equipo para este proyecto. Se sincroniza en tiempo real.</p>
-          {d.messages.length === 0 && <p>Sin mensajes todavía. Escribe el primero.</p>}
-          {d.messages.map((m) => (
-            <div className="msg" key={m.id}>
-              <div className="who">{m.author_name}</div>
-              <div className="body">{m.body}</div>
-              <div className="when">{fmtTime(m.created_at)}</div>
-            </div>
-          ))}
-          <div className="row">
-            <input className="input" style={{ margin: 0, flex: 1 }} value={msgText} onChange={(e) => setMsgText(e.target.value)} placeholder="Escribe un mensaje…" onKeyDown={(e) => { if (e.key === "Enter") sendMessage(); }} />
-            <button className="btn" onClick={sendMessage}>Enviar</button>
-          </div>
-        </div>
-
-        <div className="card">
-          <h2>Tu actividad</h2>
-          <p>Tus últimos cambios</p>
-          {d.activity.length === 0 && <p>Sin actividad todavía.</p>}
-          {d.activity.map((a) => (
-            <div className="kv" key={a.id}><b>{a.author_name}</b><span>{a.text} · {fmtTime(a.created_at)}</span></div>
-          ))}
-        </div>
-
-        <div className="row" style={{ marginTop: 4 }}>
-          <button className="btn ghost" onClick={() => { setOpenEvent(null); setDetail(null); }}>← Volver a eventos</button>
-          <div className="spacer" />
-          <button className="btn danger small" onClick={() => setConfirm({ title: "¿Borrar este evento?", text: "Se borra el evento con su ficha, rider, crew, checklist y mensajes. No se puede recuperar.", onYes: () => deleteEvent(ev) })}>Borrar evento</button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="app">
       <div className="header">
@@ -615,7 +646,19 @@ export default function Home() {
       </div>
 
       <div className="content">
-        {openEvent ? <EventForm /> : tab === "eventos" ? (
+        {openEvent ? (
+          <EventForm
+            detail={detail} sb={sb}
+            msgText={msgText} setMsgText={setMsgText}
+            onSendMessage={sendMessage}
+            onClose={() => { setOpenEvent(null); setDetail(null); }}
+            onSaveEventField={saveEventField}
+            onLogActivity={logActivity}
+            onConfirm={setConfirm}
+            onDeleteEvent={deleteEvent}
+            onReloadDetail={() => { if (openEvent) loadDetail(openEvent); }}
+          />
+        ) : tab === "eventos" ? (
           <>
             <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nombre o fecha…" />
             <div className="row wrap" style={{ marginBottom: 12 }}>
@@ -626,9 +669,9 @@ export default function Home() {
             <div className="row" style={{ marginBottom: 10 }}>
               <h2 style={{ margin: 0, fontSize: 18 }}>Próximos shows</h2>
               <div className="spacer" />
-              <span className="pill">{list.length} eventos</span>
+              <span className="pill">{list.length} shows</span>
             </div>
-            {list.length === 0 && <div className="card"><p>No hay eventos aquí todavía. Crea el primero.</p></div>}
+            {list.length === 0 && <div className="card"><p>No hay shows aquí todavía. Crea el primero.</p></div>}
             {list.map((e) => {
               const dl = daysLeft(e.event_date);
               return (
@@ -640,16 +683,16 @@ export default function Home() {
               );
             })}
             <div className="card">
-              <div className="row"><button className="btn block" onClick={createEvent} disabled={busy}>+ Crear evento nuevo</button></div>
+              <div className="row"><button className="btn block" onClick={createEvent} disabled={busy}>+ Crear SHOW nuevo</button></div>
               <div className="row" style={{ marginTop: 8 }}>
-                <button className="btn secondary block" onClick={copyFirstEvent} disabled={!events.length}>Copiar el primer evento →</button>
+                <button className="btn secondary block" onClick={copyFirstEvent} disabled={!events.length}>Copiar el primer SHOW →</button>
               </div>
             </div>
           </>
         ) : tab === "hoy" ? (
           <>
             <h2 style={{ fontSize: 18 }}>Hoy</h2>
-            {todayEvents.length === 0 && <div className="card"><p>No hay eventos hoy.</p></div>}
+            {todayEvents.length === 0 && <div className="card"><p>No hay shows hoy.</p></div>}
             {todayEvents.map((e) => (
               <button key={e.id} className="event" onClick={() => setOpenEvent(e)}>
                 <div className="name">{e.name}</div>
@@ -658,7 +701,7 @@ export default function Home() {
             ))}
             <div className="card">
               <h2>Línea de tiempo</h2>
-              <p>Mismos horarios del evento</p>
+              <p>Mismos horarios del SHOW</p>
               {todayEvents.length === 0 && <p>Sin horarios hoy.</p>}
             </div>
           </>
@@ -712,7 +755,7 @@ export default function Home() {
       </div>
 
       <div className="tabbar"><div className="inner">
-        <button className={tab === "eventos" ? "on" : ""} onClick={() => { setTab("eventos"); setOpenEvent(null); }}>Eventos</button>
+        <button className={tab === "eventos" ? "on" : ""} onClick={() => { setTab("eventos"); setOpenEvent(null); }}>Shows</button>
         <button className={tab === "hoy" ? "on" : ""} onClick={() => { setTab("hoy"); setOpenEvent(null); }}>Hoy</button>
         {isMaster && <button className={tab === "equipo" ? "on" : ""} onClick={() => { setTab("equipo"); setOpenEvent(null); }}>Equipo</button>}
         <button className={tab === "mas" ? "on" : ""} onClick={() => { setTab("mas"); setOpenEvent(null); }}>Más</button>
@@ -736,8 +779,8 @@ export default function Home() {
             <div className="steps">
               <b>iPhone (Safari):</b><br />
               1 · Abre esta app en Safari.<br />
-              2 · Toca <b>···</b> junto a la dirección, abajo.<br />
-              3 · Compartir → <b>Añadir a pantalla de inicio</b> → Añadir.<br /><br />
+              2 · Toca el botón <b>≡</b> dentro de la píldora de la dirección, abajo.<br />
+              3 · Toca <b>Agregar a Inicio</b> → <b>Añadir</b>.<br /><br />
               <b>Android (Chrome):</b><br />
               Menú → <b>Instalar app</b> / Añadir a pantalla de inicio.
             </div>
