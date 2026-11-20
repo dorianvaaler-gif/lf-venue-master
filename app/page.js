@@ -126,6 +126,7 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
       </div>
       <div className="card rider-card">
         <h2>Rider técnico de este SHOW</h2>
+        <div className="print-only">{ev.name} · {fmtDate(ev.event_date)}</div>
         <p>Toca cualquier celda y escribe: cantidad de piezas y modelo del equipo con todos sus detalles. Se guarda solo al salir de la celda.</p>
         <div className="rider-total"><b>{totalPiezas}</b> piezas · <b>{d.rider.length}</b> equipos</div>
         <table className="rider">
@@ -140,7 +141,10 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
             ))}
           </tbody>
         </table>
-        <button className="btn block" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button className="btn" style={{ flex: 1 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
+          <button className="btn secondary" onClick={() => window.print()}>PDF</button>
+        </div>
       </div>
 
       <div className="card">

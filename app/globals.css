@@ -181,3 +181,21 @@ table.rider input:focus, table.rider textarea:focus { background: var(--accent-s
 }
 .led-blue-btn { background: none; border: none; padding: 6px; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
 @keyframes ledpulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+/* Imprimir el Rider en tamaño carta: solo se imprime la tarjeta del rider */
+.print-only { display: none; }
+@page { size: letter; margin: 12mm; }
+@media print {
+  body { background: #fff !important; }
+  .header, .tabbar, .chat-fab, .chat-panel, .toast, .modal-back, .splash { display: none !important; }
+  .row, .card:not(.rider-card) { display: none !important; }
+  .app { max-width: 100%; }
+  .content { padding: 0; }
+  .card.rider-card { border: 1px solid #000 !important; box-shadow: none !important; background: #fff !important; color: #000 !important; margin: 0; }
+  .card.rider-card h2, .card.rider-card p, .rider-total, .rider-total b { color: #000 !important; }
+  .card.rider-card p { display: none; }
+  .print-only { display: block; font-size: 16px; font-weight: 800; color: #000; margin-bottom: 8px; }
+  table.rider th { background: #eee !important; color: #000 !important; }
+  table.rider th, table.rider td { border: 1px solid #999 !important; }
+  table.rider th:last-child, table.rider td:last-child { display: none; }
+  table.rider input, table.rider textarea { color: #000 !important; }
+}
