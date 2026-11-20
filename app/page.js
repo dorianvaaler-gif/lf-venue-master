@@ -101,6 +101,26 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
       <div className="row">
         <button className="btn ghost" onClick={onClose}>← Volver a shows</button>
       </div>
+      <div className="card rider-card">
+        <h2>Rider técnico de este SHOW</h2>
+        <p>Toca cualquier celda y escribe: cantidad de piezas, modelo del equipo y en Otros la nota que haga falta. Se guarda solo al salir de la celda.</p>
+        <div className="rider-total"><b>{totalPiezas}</b> piezas · <b>{d.rider.length}</b> equipos</div>
+        <table className="rider">
+          <thead><tr><th>Cantidad</th><th>Modelo</th><th>Otros</th><th></th></tr></thead>
+          <tbody>
+            {d.rider.map((r) => (
+              <tr key={r.id}>
+                <td><Field className="" value={r.cantidad || ""} onSave={async (v) => { await sb.from("rider_items").update({ cantidad: v }).eq("id", r.id); }} /></td>
+                <td><Field className="" value={r.modelo || ""} onSave={async (v) => { await sb.from("rider_items").update({ modelo: v }).eq("id", r.id); }} /></td>
+                <td><Field className="" value={r.otros || ""} onSave={async (v) => { await sb.from("rider_items").update({ otros: v }).eq("id", r.id); }} /></td>
+                <td><button className="btn ghost" onClick={async () => { await sb.from("rider_items").delete().eq("id", r.id); onReloadDetail(); }}>✕</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <button className="btn block" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "", otros: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
+      </div>
+
       <div className="card">
         <h2>Datos del SHOW</h2>
         <label className="lbl">Nombre del SHOW</label>
@@ -117,26 +137,6 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
         <Field value={ev.show_time || ""} placeholder="Ej. 21:00" onSave={(v) => onSaveEventField(ev, { show_time: v })} />
         <label className="lbl">Responsable</label>
         <Field value={ev.responsible || ""} placeholder="¿Quién responde?" onSave={(v) => onSaveEventField(ev, { responsible: v })} />
-      </div>
-
-      <div className="card rider-card">
-        <h2>Rider técnico de este SHOW · {d.rider.length} equipos</h2>
-        <p>Toca cualquier celda y escribe: cantidad de piezas, modelo del equipo y en Otros la nota que haga falta. Se guarda solo al salir de la celda.</p>
-        <div className="kv"><span>Total de piezas</span><b>{totalPiezas}</b></div>
-        <table className="rider">
-          <thead><tr><th>Cantidad</th><th>Modelo</th><th>Otros</th><th></th></tr></thead>
-          <tbody>
-            {d.rider.map((r) => (
-              <tr key={r.id}>
-                <td><Field className="" value={r.cantidad || ""} onSave={async (v) => { await sb.from("rider_items").update({ cantidad: v }).eq("id", r.id); }} /></td>
-                <td><Field className="" value={r.modelo || ""} onSave={async (v) => { await sb.from("rider_items").update({ modelo: v }).eq("id", r.id); }} /></td>
-                <td><Field className="" value={r.otros || ""} onSave={async (v) => { await sb.from("rider_items").update({ otros: v }).eq("id", r.id); }} /></td>
-                <td><button className="btn ghost" onClick={async () => { await sb.from("rider_items").delete().eq("id", r.id); onReloadDetail(); }}>✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <button className="btn secondary block" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "", otros: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
       </div>
 
       <div className="card">
