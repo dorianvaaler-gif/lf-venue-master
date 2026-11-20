@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServiceSupabase } from "@/lib/supabase";
-import webpush from "web-push";
+import { setVapidDetails, sendNotification } from "web-push";
 
 // POST { sender_id, sender_name, text, scope: "team" | "event", event_name }
 // -> avisa por push a todo el crew menos al que escribió.
@@ -12,7 +12,7 @@ export async function POST(req) {
     const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
     const priv = process.env.VAPID_PRIVATE_KEY || "";
     if (!pub || !priv) return NextResponse.json({ ok: false, error: "Push no configurado" });
-    webpush.setVapidDetails("mailto:dorianvaaler@gmail.com", pub, priv);
+    setVapidDetails("mailto:dorianvaaler@gmail.com", pub, priv);
     const sb = getServiceSupabase();
     if (!sb) return NextResponse.json({ ok: false, error: "Supabase no configurado" }, { status: 500 });
     const { data: subs } = await sb.from("push_subscriptions").select("*");
@@ -26,7 +26,7 @@ export async function POST(req) {
     let sent = 0, removed = 0;
     await Promise.all(targets.map(async (s) => {
       try {
-        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
+        await sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload);
         sent++;
       } catch (e) {
         // Suscripción vencida o borrada (410/404): se limpia sola.
