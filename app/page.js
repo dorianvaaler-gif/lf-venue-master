@@ -23,16 +23,43 @@ function fmtDate(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
   return d.toLocaleDateString("es-MX", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
+// LED verde: ¿este SHOW está en su horario ahora mismo? Ventana = de la
+// primera a la última hora guardada (llegada, show y horarios del día), solo
+// el día del evento. Con una sola hora guardada, el LED dura 2 h desde ella.
+function parseHM(s) {
+  if (!s) return null;
+  const m = String(s).match(/(\d{1,2})[:.h](\d{2})/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
+function liveWindow(ev, schedTimes) {
+  const times = [ev.call_time, ev.show_time, ...(schedTimes || [])].map(parseHM).filter((x) => x !== null);
+  if (!times.length) return null;
+  let start = Math.min(...times), end = Math.max(...times);
+  if (end <= start) end = start + 120;
+  return { start, end };
+}
+function isLiveNow(ev, schedTimes, now) {
+  if (!ev || !ev.event_date) return false;
+  const w = liveWindow(ev, schedTimes);
+  if (!w) return false;
+  const d = new Date(now);
+  const ymd = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  if (ymd !== ev.event_date) return false;
+  const mins = d.getHours() * 60 + d.getMinutes();
+  return mins >= w.start && mins <= w.end;
+}
 function fmtTime(ts) {
   if (!ts) return "";
   return new Date(ts).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 // Sonido de apertura: arpegio La–Do–Mi–La–Mi.
-// iOS exige que el AudioContext se reanude dentro del gesto del usuario.
-// Antes solo sonaba al tocar Entrar en la pantalla de inicio: con la sesión
-// guardada la app salta sola a la pantalla principal sin tocar nada y el
-// sonido nunca sonaba. Ahora suena UNA vez en el primer toque dentro de la
-// app (también al tocar Entrar), con un AudioContext compartido.
+// iOS exige que el AudioContext se reanude dentro del gesto del usuario:
+// sin un toque previo no puede sonar al abrir. Por eso suena en el primer
+// toque (o al tocar Entrar), se intenta al entrar, y vuelve a sonar cada vez
+// que regresas a la app una vez desbloqueado el audio.
 let sharedCtx = null;
 let openSoundDone = false;
 function ring() {
@@ -62,6 +89,11 @@ function playOpenSound() {
   if (openSoundDone) return;
   openSoundDone = true;
   ring();
+}
+function playReturnSound() {
+  // Solo suena si el audio ya está desbloqueado (hubo un toque antes):
+  // iOS no permite sonar sin gesto del usuario.
+  if (sharedCtx && sharedCtx.state === "running") ring();
 }
 function urlB64ToUint8(s) {
   const pad = "=".repeat((4 - (s.length % 4)) % 4);
@@ -110,7 +142,7 @@ function Field({ value, onSave, placeholder, type, rows, className = "input", st
 // Formulario del SHOW. Vive fuera de Home para que su identidad sea estable:
 // antes estaba definido dentro de Home y React lo desmontaba en cada render,
 // lo que cerraba el teclado al escribir.
-function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, onSaveEventField, onLogActivity, onConfirm, onDeleteEvent, onReloadDetail }) {
+function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, onSaveEventField, onLogActivity, onConfirm, onDeleteEvent, onReloadDetail, now }) {
   const ev = detail?.event;
   if (!ev || !detail) return null;
   const d = detail;
@@ -119,10 +151,12 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
   const tickerParts = [fmtDate(ev.event_date) === "—" ? "Sin fecha" : fmtDate(ev.event_date), ev.show_time ? "Show " + ev.show_time : "Sin horario"];
   if (ev.notes) tickerParts.push(ev.notes);
   const tickerText = tickerParts.join("   •   ");
+  const live = isLiveNow(ev, d.schedules.map((s) => s.time), now);
   return (
     <div>
       <div className="row">
         <button className="btn ghost" onClick={onClose}>← Volver a shows</button>
+        {live ? <><div className="spacer" /><span className="live-pill"><span className="led-green on" /> EN VIVO</span></> : null}
       </div>
       <div className="card rider-card">
         <h2>Rider técnico de este SHOW</h2>
@@ -300,6 +334,8 @@ export default function Home() {
   const [teamMsgText, setTeamMsgText] = useState("");
   const [teamUnread, setTeamUnread] = useState(false); // LED rojo: mensaje nuevo en el chat del equipo
   const [changedEvents, setChangedEvents] = useState({}); // {eventId: ts} LED azul: cambios en algún SHOW
+  const [now, setNow] = useState(() => Date.now()); // LED verde: reloj que avanza
+  const [schedByEvent, setSchedByEvent] = useState({}); // {eventId: [horas]} para el LED verde en la lista
   const [pushState, setPushState] = useState("off"); // off | on | denied | unsupported | error
   const teamChatOpenRef = useRef(false);
   const openEventRef = useRef(null);
@@ -341,16 +377,27 @@ export default function Home() {
     }
   }, []);
 
-  // Sonido de apertura: suena en el primer toque dentro de la app, una sola
-  // vez por apertura. Cubre a los usuarios con sesión guardada, que entran
-  // directo sin pasar por la pantalla de inicio.
+  // Sonido de apertura: suena siempre que se pueda. iOS no deja sonar sin
+  // gesto del usuario, así que: intenta al entrar, suena en el primer toque,
+  // y vuelve a sonar cada vez que regresas a la app (si el audio ya quedó
+  // desbloqueado por un toque anterior).
   useEffect(() => {
     if (phase !== "app") return;
+    ring();
     const h = () => playOpenSound();
+    const onVis = () => { if (!document.hidden) playReturnSound(); };
     window.addEventListener("pointerdown", h, { once: true });
     window.addEventListener("keydown", h, { once: true });
-    return () => { window.removeEventListener("pointerdown", h); window.removeEventListener("keydown", h); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pageshow", onVis);
+    return () => { window.removeEventListener("pointerdown", h); window.removeEventListener("keydown", h); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pageshow", onVis); };
   }, [phase]);
+
+  // LED verde: el reloj avanza cada 30 s para prender/apagar el LED en su horario.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
 
   // Refs frescas para los handlers de Realtime (evitan cierres viejos).
   useEffect(() => { teamChatOpenRef.current = teamChatOpen; }, [teamChatOpen]);
@@ -451,6 +498,11 @@ export default function Home() {
     if (!sb) return;
     const { data } = await sb.from("events").select("*").order("event_date", { ascending: true });
     setEvents(data || []);
+    // LED verde en la lista: horarios guardados por SHOW.
+    const sc = await sb.from("schedules").select("event_id,time");
+    const map = {};
+    (sc.data || []).forEach((s) => { if (s.event_id) { (map[s.event_id] = map[s.event_id] || []).push(s.time); } });
+    setSchedByEvent(map);
     // LED azul al abrir: SHOWs editados desde la última vez que los vi.
     try {
       const seen = localStorage.getItem("lf-events-seen");
@@ -475,7 +527,7 @@ export default function Home() {
       .on("postgres_changes", { event: "*", schema: "public", table: "rider_items" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
       .on("postgres_changes", { event: "*", schema: "public", table: "checklist_items" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
       .on("postgres_changes", { event: "*", schema: "public", table: "event_crew" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, (p) => { if (openEvent) loadDetail(openEvent); loadEvents(); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
       .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "team_messages" }, (p) => {
         loadTeamMessages();
@@ -876,6 +928,7 @@ export default function Home() {
             onConfirm={setConfirm}
             onDeleteEvent={deleteEvent}
             onReloadDetail={() => { if (openEvent) loadDetail(openEvent); }}
+            now={now}
           />
         ) : tab === "eventos" ? (
           <>
@@ -895,7 +948,7 @@ export default function Home() {
               const dl = daysLeft(e.event_date);
               return (
                 <button key={e.id} className="event" onClick={() => setOpenEvent(e)}>
-                  <div className="name">{changedEvents[e.id] ? <span className="led-blue on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{e.name}</div>
+                  <div className="name">{isLiveNow(e, schedByEvent[e.id], now) ? <span className="led-green on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{changedEvents[e.id] ? <span className="led-blue on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{e.name}</div>
                   <div className="meta">{fmtDate(e.event_date)}{e.show_time ? " · Show " + e.show_time : ""}{e.responsible ? " · " + e.responsible : ""}</div>
                   <div className="days">{dl === null ? "" : dl === 0 ? "Es hoy" : dl > 0 ? "Faltan " + dl + " días" : "Pasó hace " + Math.abs(dl) + " días"}</div>
                 </button>
@@ -914,7 +967,7 @@ export default function Home() {
             {todayEvents.length === 0 && <div className="card"><p>No hay shows hoy.</p></div>}
             {todayEvents.map((e) => (
               <button key={e.id} className="event" onClick={() => setOpenEvent(e)}>
-                <div className="name">{changedEvents[e.id] ? <span className="led-blue on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{e.name}</div>
+                <div className="name">{isLiveNow(e, schedByEvent[e.id], now) ? <span className="led-green on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{changedEvents[e.id] ? <span className="led-blue on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{e.name}</div>
                 <div className="meta">{fmtDate(e.event_date)}{e.call_time ? " · Llegada " + e.call_time : ""}{e.show_time ? " · Show " + e.show_time : ""}</div>
               </button>
             ))}
@@ -996,7 +1049,7 @@ export default function Home() {
       {/* Botón del chat del equipo: muy a la vista, con LED rojo si hay mensaje nuevo */}
       {!teamChatOpen && (
         <button className="chat-fab" onClick={() => { setTeamChatOpen(true); markTeamSeen(); }} aria-label="Chat del equipo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>
+          <img src="/gaffer-tape.webp" alt="Chat del equipo" className="chat-fab-img" />
           {teamUnread && <span className="chat-led" />}
         </button>
       )}
