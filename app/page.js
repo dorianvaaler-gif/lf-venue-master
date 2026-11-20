@@ -115,6 +115,10 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
   if (!ev || !detail) return null;
   const d = detail;
   const totalPiezas = d.rider.reduce((a, r) => a + (parseInt(r.cantidad, 10) || 0), 0);
+  // Banner del SHOW: fecha + horario + anotaciones, avanzando todo el tiempo.
+  const tickerParts = [fmtDate(ev.event_date) === "—" ? "Sin fecha" : fmtDate(ev.event_date), ev.show_time ? "Show " + ev.show_time : "Sin horario"];
+  if (ev.notes) tickerParts.push(ev.notes);
+  const tickerText = tickerParts.join("   •   ");
   return (
     <div>
       <div className="row">
@@ -122,22 +126,21 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
       </div>
       <div className="card rider-card">
         <h2>Rider técnico de este SHOW</h2>
-        <p>Toca cualquier celda y escribe: cantidad de piezas, modelo del equipo y en Otros la nota que haga falta. Se guarda solo al salir de la celda.</p>
+        <p>Toca cualquier celda y escribe: cantidad de piezas y modelo del equipo con todos sus detalles. Se guarda solo al salir de la celda.</p>
         <div className="rider-total"><b>{totalPiezas}</b> piezas · <b>{d.rider.length}</b> equipos</div>
         <table className="rider">
-          <thead><tr><th>Cantidad</th><th>Modelo</th><th>Otros</th><th></th></tr></thead>
+          <thead><tr><th>Cantidad</th><th>Modelo</th><th></th></tr></thead>
           <tbody>
             {d.rider.map((r) => (
               <tr key={r.id}>
                 <td><Field className="" value={r.cantidad || ""} onSave={async (v) => { await sb.from("rider_items").update({ cantidad: v }).eq("id", r.id); }} /></td>
-                <td><Field className="" value={r.modelo || ""} onSave={async (v) => { await sb.from("rider_items").update({ modelo: v }).eq("id", r.id); }} /></td>
-                <td><Field className="" value={r.otros || ""} onSave={async (v) => { await sb.from("rider_items").update({ otros: v }).eq("id", r.id); }} /></td>
+                <td><Field rows={2} className="" value={r.modelo || ""} onSave={async (v) => { await sb.from("rider_items").update({ modelo: v }).eq("id", r.id); }} /></td>
                 <td><button className="btn ghost" onClick={async () => { await sb.from("rider_items").delete().eq("id", r.id); onReloadDetail(); }}>✕</button></td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button className="btn block" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "", otros: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
+        <button className="btn block" style={{ marginTop: 10 }} onClick={async () => { await sb.from("rider_items").insert({ event_id: ev.id, cantidad: "", modelo: "" }); onReloadDetail(); }}>+ Agregar equipo</button>
       </div>
 
       <div className="card">
@@ -146,6 +149,7 @@ function EventForm({ detail, sb, msgText, setMsgText, onSendMessage, onClose, on
         <Field value={ev.name || ""} onSave={(v) => onSaveEventField(ev, { name: v })} />
         <label className="lbl">Fecha del SHOW (para ver cuántos días faltan)</label>
         <Field type="date" value={ev.event_date || ""} onSave={(v) => onSaveEventField(ev, { event_date: v })} />
+        <div className="ticker"><div className="ticker-track"><span>{tickerText}</span><span aria-hidden="true">{tickerText}</span></div></div>
         <div className="kv"><span>Fecha</span><b>{fmtDate(ev.event_date)}</b></div>
         <div className="kv"><span>Faltan</span><b>{daysLeft(ev.event_date) === null ? "—" : daysLeft(ev.event_date) === 0 ? "Hoy" : daysLeft(ev.event_date) > 0 ? daysLeft(ev.event_date) + " días" : "Pasó hace " + Math.abs(daysLeft(ev.event_date)) + " días"}</b></div>
         <div className="kv"><span>Rider</span><b>{d.rider.length} equipos</b></div>
