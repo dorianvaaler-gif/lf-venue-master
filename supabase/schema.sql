@@ -197,3 +197,29 @@ grant select, insert, update, delete on all tables in schema public to anon, aut
 grant usage, select on all sequences in schema public to anon, authenticated, service_role;
 alter default privileges for role postgres in schema public grant select, insert, update, delete on tables to anon, authenticated, service_role;
 alter default privileges for role postgres in schema public grant usage, select on sequences to anon, authenticated, service_role;
+
+-- Chat del equipo + push (2026-11-19 noche). En el proyecto vivo ya se aplicó
+-- con supabase/fix_team_chat.sql; esto solo queda aquí para proyectos nuevos.
+create table if not exists public.team_messages (
+  id uuid primary key default gen_random_uuid(),
+  author_id uuid references auth.users(id),
+  author_name text,
+  body text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.team_messages enable row level security;
+create policy "equipo activo lee y escribe chat del equipo" on public.team_messages
+  for all using (public.is_active_user());
+grant select, insert, update, delete on public.team_messages to anon, authenticated, service_role;
+alter publication supabase_realtime add table public.team_messages;
+
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id),
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  created_at timestamptz not null default now()
+);
+alter table public.push_subscriptions enable row level security;
+grant select, insert, update, delete on public.push_subscriptions to anon, authenticated, service_role;

@@ -27,14 +27,20 @@ function fmtTime(ts) {
   if (!ts) return "";
   return new Date(ts).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
-// Sonido de apertura: arpegio La–Do–Mi–La–Mi. Suena al tocar Entrar.
-// iOS exige que el AudioContext se reanude dentro del gesto del usuario,
-// por eso se llama a ctx.resume() antes de programar las notas.
+// Sonido de apertura: arpegio La–Do–Mi–La–Mi.
+// iOS exige que el AudioContext se reanude dentro del gesto del usuario.
+// Antes solo sonaba al tocar Entrar en la pantalla de inicio: con la sesión
+// guardada la app salta sola a la pantalla principal sin tocar nada y el
+// sonido nunca sonaba. Ahora suena UNA vez en el primer toque dentro de la
+// app (también al tocar Entrar), con un AudioContext compartido.
+let sharedCtx = null;
+let openSoundDone = false;
 function ring() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
-    const ctx = new Ctx();
+    if (!sharedCtx) sharedCtx = new Ctx();
+    const ctx = sharedCtx;
     const play = () => {
       const notes = [440, 523.25, 659.25, 880, 659.25];
       const t0 = ctx.currentTime + 0.02;
@@ -51,6 +57,19 @@ function ring() {
     if (ctx.state === "suspended") ctx.resume().then(play).catch(play);
     else play();
   } catch (e) { /* sin sonido, no pasa nada */ }
+}
+function playOpenSound() {
+  if (openSoundDone) return;
+  openSoundDone = true;
+  ring();
+}
+function urlB64ToUint8(s) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
 }
 
 // Logo de la app. Si la imagen no carga (webview, red), muestra un distintivo
@@ -267,6 +286,18 @@ export default function Home() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [newEvent, setNewEvent] = useState(false);
   const detailRef = useRef(null);
+  // Chat del equipo (público, para todo el crew) + LEDs + notificaciones.
+  const [teamChatOpen, setTeamChatOpen] = useState(false);
+  const [teamMessages, setTeamMessages] = useState([]);
+  const [teamMsgText, setTeamMsgText] = useState("");
+  const [teamUnread, setTeamUnread] = useState(false); // LED rojo: mensaje nuevo en el chat del equipo
+  const [changedEvents, setChangedEvents] = useState({}); // {eventId: ts} LED azul: cambios en algún SHOW
+  const [pushState, setPushState] = useState("off"); // off | on | denied | unsupported | error
+  const teamChatOpenRef = useRef(false);
+  const openEventRef = useRef(null);
+  const userRef = useRef(null);
+  const justSavedRef = useRef(0); // mi último guardado: sus ecos de Realtime no encienden LEDs
+  const teamListRef = useRef(null);
 
   function say(t) { setToast(t); setTimeout(() => setToast(""), 2600); }
 
@@ -294,6 +325,73 @@ export default function Home() {
     window.addEventListener("beforeinstallprompt", h);
     return () => window.removeEventListener("beforeinstallprompt", h);
   }, []);
+
+  // Service worker (notificaciones push en iOS) — se registra una vez.
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
+
+  // Sonido de apertura: suena en el primer toque dentro de la app, una sola
+  // vez por apertura. Cubre a los usuarios con sesión guardada, que entran
+  // directo sin pasar por la pantalla de inicio.
+  useEffect(() => {
+    if (phase !== "app") return;
+    const h = () => playOpenSound();
+    window.addEventListener("pointerdown", h, { once: true });
+    window.addEventListener("keydown", h, { once: true });
+    return () => { window.removeEventListener("pointerdown", h); window.removeEventListener("keydown", h); };
+  }, [phase]);
+
+  // Refs frescas para los handlers de Realtime (evitan cierres viejos).
+  useEffect(() => { teamChatOpenRef.current = teamChatOpen; }, [teamChatOpen]);
+  useEffect(() => { openEventRef.current = openEvent; }, [openEvent]);
+  useEffect(() => { userRef.current = user; }, [user]);
+
+  // LED azul: cambios en SHOWs que ya estaban pendientes (de una sesión anterior).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("lf-changed-events");
+      if (raw) setChangedEvents(JSON.parse(raw) || {});
+    } catch (e) {}
+  }, []);
+
+  // LED rojo: al abrir el chat del equipo se marca todo como leído.
+  function markTeamSeen() {
+    setTeamUnread(false);
+    try { localStorage.setItem("lf-team-seen", new Date().toISOString()); } catch (e) {}
+  }
+  // LED azul: tocar el LED marca todo como visto y lo apaga.
+  function clearChangedEvents() {
+    setChangedEvents({});
+    try {
+      localStorage.removeItem("lf-changed-events");
+      localStorage.setItem("lf-events-seen", new Date().toISOString());
+    } catch (e) {}
+  }
+  function clearChangedEvent(eventId) {
+    setChangedEvents((prev) => {
+      if (!prev[eventId]) return prev;
+      const next = { ...prev };
+      delete next[eventId];
+      try { localStorage.setItem("lf-changed-events", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  }
+  // LED azul: un cambio de OTRA persona en un SHOW (no el que tengo abierto,
+  // que ya lo estoy viendo, ni el eco de mi propio guardado).
+  function markChangedEvent(eventId) {
+    if (!eventId) return;
+    if (openEventRef.current && openEventRef.current.id === eventId) return;
+    if (Date.now() - justSavedRef.current < 3000) return;
+    setChangedEvents((prev) => {
+      if (prev[eventId]) return prev;
+      const next = { ...prev, [eventId]: Date.now() };
+      try { localStorage.setItem("lf-changed-events", JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+  }
 
   async function loadProfile(u) {
     if (!sb || !u) return null;
@@ -345,19 +443,36 @@ export default function Home() {
     if (!sb) return;
     const { data } = await sb.from("events").select("*").order("event_date", { ascending: true });
     setEvents(data || []);
+    // LED azul al abrir: SHOWs editados desde la última vez que los vi.
+    try {
+      const seen = localStorage.getItem("lf-events-seen");
+      if (seen) {
+        const t = new Date(seen).getTime();
+        const fresh = {};
+        (data || []).forEach((e) => { if (e.updated_at && new Date(e.updated_at).getTime() > t) fresh[e.id] = new Date(e.updated_at).getTime(); });
+        if (Object.keys(fresh).length) setChangedEvents((prev) => ({ ...fresh, ...prev }));
+      }
+    } catch (e) {}
   }
-  useEffect(() => { if (phase === "app") loadEvents(); }, [phase]);
+  useEffect(() => { if (phase === "app") { loadEvents(); loadTeamMessages(); } }, [phase]);
 
   useEffect(() => {
     if (!sb || phase !== "app") return;
     const ch = sb.channel("lf-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "events" }, () => loadEvents())
-      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => { if (openEvent) loadDetail(openEvent); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "rider_items" }, () => { if (openEvent) loadDetail(openEvent); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "checklist_items" }, () => { if (openEvent) loadDetail(openEvent); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "event_crew" }, () => { if (openEvent) loadDetail(openEvent); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, () => { if (openEvent) loadDetail(openEvent); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, () => { if (openEvent) loadDetail(openEvent); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "events" }, (p) => { loadEvents(); if (p?.new?.id) markChangedEvent(p.new.id); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, (p) => {
+        if (openEvent) loadDetail(openEvent);
+        if (p?.new?.event_id && p.new.author_id !== userRef.current?.id) markChangedEvent(p.new.event_id);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "rider_items" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "checklist_items" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "event_crew" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, (p) => { if (openEvent) loadDetail(openEvent); if (p?.new?.event_id) markChangedEvent(p.new.event_id); })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "team_messages" }, (p) => {
+        loadTeamMessages();
+        if (!teamChatOpenRef.current && p?.new?.author_id !== userRef.current?.id) setTeamUnread(true);
+      })
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [phase, openEvent]);
@@ -387,6 +502,7 @@ export default function Home() {
   }
   async function saveEventField(ev, patch) {
     if (!sb) return;
+    justSavedRef.current = Date.now();
     const { error } = await sb.from("events").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", ev.id);
     if (!error) { setOpenEvent({ ...ev, ...patch }); setEvents((es) => es.map((e) => (e.id === ev.id ? { ...e, ...patch } : e))); }
   }
@@ -436,6 +552,7 @@ export default function Home() {
   async function createEvent() {
     if (!sb) return;
     setBusy(true);
+    justSavedRef.current = Date.now();
     const { data, error } = await sb.from("events").insert({
       name: "Nuevo SHOW", event_date: new Date().toISOString().slice(0, 10),
       call_time: "", show_time: "", responsible: "", notes: "", created_by: user?.id,
@@ -448,6 +565,7 @@ export default function Home() {
   async function copyFirstEvent() {
     if (!sb || !events.length) return;
     const f = events[0];
+    justSavedRef.current = Date.now();
     const { data, error } = await sb.from("events").insert({
       name: f.name + " (copia)", event_date: f.event_date, call_time: f.call_time,
       show_time: f.show_time, responsible: f.responsible, notes: f.notes, created_by: user?.id,
@@ -457,6 +575,7 @@ export default function Home() {
   }
   async function deleteEvent(ev) {
     if (!sb) return;
+    justSavedRef.current = Date.now();
     await sb.from("events").delete().eq("id", ev.id);
     setOpenEvent(null); setDetail(null); await loadEvents(); say("SHOW borrado");
   }
@@ -507,19 +626,88 @@ export default function Home() {
     else say("No se pudo cambiar");
   }
 
+  // ---------- chat del equipo (público) ----------
+  async function loadTeamMessages() {
+    if (!sb) return;
+    const { data } = await sb.from("team_messages").select("*").order("created_at", { ascending: true }).limit(100);
+    const list = data || [];
+    setTeamMessages(list);
+    try {
+      const seen = localStorage.getItem("lf-team-seen");
+      const me = userRef.current?.id;
+      setTeamUnread(list.some((m) => (!seen || new Date(m.created_at).getTime() > new Date(seen).getTime()) && m.author_id !== me));
+    } catch (e) {}
+  }
+  async function sendTeamMessage() {
+    if (!sb || !teamMsgText.trim() || !profile) return;
+    const body = teamMsgText.trim(); setTeamMsgText("");
+    const { error } = await sb.from("team_messages").insert({ author_id: user.id, author_name: profile.name || profile.email, body });
+    if (error) { setTeamMsgText(body); say("No se pudo enviar"); return; }
+    markTeamSeen();
+    notifyPush({ sender_id: user.id, sender_name: profile.name || profile.email, text: body, scope: "team" });
+    loadTeamMessages();
+  }
+  // Baja al último mensaje cuando se abre el chat o llega uno nuevo.
+  useEffect(() => {
+    if (teamChatOpen && teamListRef.current) {
+      teamListRef.current.scrollTop = teamListRef.current.scrollHeight;
+    }
+  }, [teamMessages, teamChatOpen]);
+  // Al abrir un SHOW se apaga su LED azul (ya lo estoy viendo).
+  useEffect(() => { if (openEvent) clearChangedEvent(openEvent.id); }, [openEvent]);
+
+  // ---------- notificaciones push ----------
+  // Aviso al resto del crew cuando escribo (chat del equipo o de un SHOW).
+  // No bloquea el envío: si el aviso falla, el mensaje ya quedó guardado.
+  async function notifyPush(payload) {
+    try {
+      await fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    } catch (e) {}
+  }
+  // Estado actual de las notificaciones en este teléfono.
+  useEffect(() => {
+    if (phase !== "app") return;
+    (async () => {
+      if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) { setPushState("unsupported"); return; }
+      if (Notification.permission === "denied") { setPushState("denied"); return; }
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        setPushState(sub ? "on" : "off");
+      } catch (e) { setPushState("error"); }
+    })();
+  }, [phase]);
+  async function enablePush() {
+    try {
+      const pub = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
+      if (!pub) { say("Faltan las llaves de notificaciones en Vercel"); return; }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { setPushState("denied"); say("Sin permiso no llegan avisos"); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(pub) });
+      const r = await fetch("/api/push-subscriptions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: user?.id, subscription: sub.toJSON() }),
+      });
+      if (!r.ok) { setPushState("error"); say("No se pudo guardar la suscripción"); return; }
+      setPushState("on"); say("Notificaciones activadas");
+    } catch (e) { setPushState("error"); say("No se pudo activar"); }
+  }
+
   // ---------- mensajes ----------
   async function sendMessage() {
     if (!sb || !openEvent || !msgText.trim() || !profile) return;
     const body = msgText.trim(); setMsgText("");
     await sb.from("messages").insert({ event_id: openEvent.id, author_id: user.id, author_name: profile.name || profile.email, body });
     await logActivity(openEvent.id, "escribió en Mensajes");
+    notifyPush({ sender_id: user.id, sender_name: profile.name || profile.email, text: body, scope: "event", event_id: openEvent.id, event_name: openEvent.name });
     loadDetail(openEvent);
   }
 
   // ---------- render: splash ----------
   if (phase === "splash") {
     return (
-      <div className="splash" onClick={() => { ring(); setPhase(localStorage.getItem("lf-terms") ? (user ? "app" : "auth") : "terms"); }}>
+      <div className="splash" onClick={() => { playOpenSound(); setPhase(localStorage.getItem("lf-terms") ? (user ? "app" : "auth") : "terms"); }}>
         <Logo size={200} radius={44} className="splash-logo" />
         <div className="name">LF<span>-</span>Venue</div>
         <div className="tag">Gestión de producción · Luz Fría Studio</div>
@@ -652,6 +840,7 @@ export default function Home() {
 
   // ---------- render: app ----------
   const isMaster = profile?.role === "master";
+  const hasChanges = Object.keys(changedEvents).length > 0;
   const list = filteredEvents();
 
   return (
@@ -660,6 +849,10 @@ export default function Home() {
         <Logo size={40} radius={12} />
         <div><div className="title">LF<span>-</span>Venue</div><div className="sub">{isMaster ? "Master · " : ""}{profile?.name || profile?.email || ""}</div></div>
         <div className="spacer" />
+        <button className="led-blue-btn" onClick={clearChangedEvents} title={hasChanges ? "Hay cambios en shows — toca para marcarlos como vistos" : "Sin cambios en shows"}>
+          <span className={"led-blue " + (hasChanges ? "on" : "")} />
+          {hasChanges ? "Cambios" : ""}
+        </button>
         <span className="pill">Guardado en la nube ✓</span>
       </div>
 
@@ -694,7 +887,7 @@ export default function Home() {
               const dl = daysLeft(e.event_date);
               return (
                 <button key={e.id} className="event" onClick={() => setOpenEvent(e)}>
-                  <div className="name">{e.name}</div>
+                  <div className="name">{changedEvents[e.id] ? <span className="led-blue on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{e.name}</div>
                   <div className="meta">{fmtDate(e.event_date)}{e.show_time ? " · Show " + e.show_time : ""}{e.responsible ? " · " + e.responsible : ""}</div>
                   <div className="days">{dl === null ? "" : dl === 0 ? "Es hoy" : dl > 0 ? "Faltan " + dl + " días" : "Pasó hace " + Math.abs(dl) + " días"}</div>
                 </button>
@@ -713,7 +906,7 @@ export default function Home() {
             {todayEvents.length === 0 && <div className="card"><p>No hay shows hoy.</p></div>}
             {todayEvents.map((e) => (
               <button key={e.id} className="event" onClick={() => setOpenEvent(e)}>
-                <div className="name">{e.name}</div>
+                <div className="name">{changedEvents[e.id] ? <span className="led-blue on" style={{ display: "inline-block", marginRight: 7, verticalAlign: "1px" }} /> : null}{e.name}</div>
                 <div className="meta">{fmtDate(e.event_date)}{e.call_time ? " · Llegada " + e.call_time : ""}{e.show_time ? " · Show " + e.show_time : ""}</div>
               </button>
             ))}
@@ -761,6 +954,19 @@ export default function Home() {
           <>
             <h2 style={{ fontSize: 18 }}>Más opciones</h2>
             <div className="card">
+              <h2>Notificaciones</h2>
+              <p>Te avisan en tu teléfono cuando alguien escriba en el chat del equipo o en un SHOW. Solo funcionan si la app está instalada en Inicio.</p>
+              {pushState === "on" ? (
+                <p>Activadas ✓</p>
+              ) : pushState === "denied" ? (
+                <p>Están bloqueadas en este teléfono. Actívalas en Ajustes → Safari → Notificaciones.</p>
+              ) : pushState === "unsupported" ? (
+                <p>Este navegador no tiene notificaciones push. Instala la app desde Safari y vuelve aquí.</p>
+              ) : (
+                <button className="btn block" onClick={enablePush}>Activar notificaciones</button>
+              )}
+            </div>
+            <div className="card">
               <div className="row" style={{ marginBottom: 8 }}><button className="btn secondary block" onClick={() => setShowTerms(true)}>Ver Términos y Condiciones</button></div>
               <div className="row" style={{ marginBottom: 8 }}><button className="btn secondary block" onClick={() => setShowInstall(true)}>Instalar LF-Venue en este teléfono</button></div>
               <div className="row"><button className="btn danger block" onClick={async () => { await sb?.auth.signOut(); setUser(null); setProfile(null); setPhase("auth"); }}>Cerrar sesión</button></div>
@@ -778,6 +984,37 @@ export default function Home() {
         {isMaster && <button className={tab === "equipo" ? "on" : ""} onClick={() => { setTab("equipo"); setOpenEvent(null); }}>Equipo</button>}
         <button className={tab === "mas" ? "on" : ""} onClick={() => { setTab("mas"); setOpenEvent(null); }}>Más</button>
       </div></div>
+
+      {/* Botón del chat del equipo: muy a la vista, con LED rojo si hay mensaje nuevo */}
+      {!teamChatOpen && (
+        <button className="chat-fab" onClick={() => { setTeamChatOpen(true); markTeamSeen(); }} aria-label="Chat del equipo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></svg>
+          {teamUnread && <span className="chat-led" />}
+        </button>
+      )}
+      {teamChatOpen && (
+        <div className="chat-panel">
+          <div className="chat-head">
+            <b>Chat del equipo</b>
+            <span className="pill">Todos</span>
+            <button className="btn ghost" onClick={() => setTeamChatOpen(false)}>↓ Minimizar</button>
+          </div>
+          <div className="chat-list" ref={teamListRef}>
+            {teamMessages.length === 0 && <p style={{ color: "var(--muted)", fontSize: 14 }}>Sin mensajes todavía. Escribe el primero.</p>}
+            {teamMessages.map((m) => (
+              <div className="msg" key={m.id}>
+                <div className="who">{m.author_name}</div>
+                <div className="body">{m.body}</div>
+                <div className="when">{fmtTime(m.created_at)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="row chat-input">
+            <input className="input" style={{ margin: 0, flex: 1 }} value={teamMsgText} onChange={(e) => setTeamMsgText(e.target.value)} placeholder="Escribe al equipo…" onKeyDown={(e) => { if (e.key === "Enter") sendTeamMessage(); }} />
+            <button className="btn" onClick={sendTeamMessage}>Enviar</button>
+          </div>
+        </div>
+      )}
 
       {showTerms && (
         <div className="modal-back" onClick={() => setShowTerms(false)}>
