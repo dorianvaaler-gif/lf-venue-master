@@ -84,6 +84,17 @@ export default function Home() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
+  // Link de invitación: ?invite=CODIGO&email=correo — abre el formulario de
+  // invitación con el correo y el código ya puestos.
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const c = (q.get("invite") || "").trim().toUpperCase();
+      const em = (q.get("email") || "").trim().toLowerCase();
+      if (c) { setAuthMode("invite"); setInviteCode(c); if (em) setEmail(em); }
+    } catch (e) { /* sin link, no pasa nada */ }
+  }, []);
+
   useEffect(() => {
     const h = (e) => { if (e && e.prompt) { e.preventDefault(); setDeferredPrompt(e); } };
     window.addEventListener("beforeinstallprompt", h);
@@ -664,6 +675,8 @@ export default function Home() {
                   <p>Comparte este código con <b>{inviteResult.email}</b>:</p>
                   <div className="codebox">{inviteResult.code}</div>
                   <button className="btn secondary block" onClick={() => { navigator.clipboard?.writeText(inviteResult.code); say("Código copiado"); }}>Copiar código</button>
+                  <button className="btn block" style={{ marginTop: 8 }} onClick={() => { const link = window.location.origin + "/?invite=" + inviteResult.code + "&email=" + encodeURIComponent(inviteResult.email); navigator.clipboard?.writeText(link); say("Link copiado"); }}>Copiar link de invitación</button>
+                  <p style={{ marginTop: 8 }}>Con el link, a la persona ya le sale el código puesto; solo pone su nombre y su contraseña.</p>
                 </div>
               )}
               {err && <div className="banner warn" style={{ marginTop: 10 }}>{err}</div>}
