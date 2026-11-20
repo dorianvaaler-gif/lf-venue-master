@@ -27,21 +27,39 @@ function fmtTime(ts) {
   if (!ts) return "";
   return new Date(ts).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
+// Sonido de apertura: arpegio La–Do–Mi–La–Mi. Suena al tocar Entrar.
+// iOS exige que el AudioContext se reanude dentro del gesto del usuario,
+// por eso se llama a ctx.resume() antes de programar las notas.
 function ring() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
     const ctx = new Ctx();
-    const notes = [440, 523.25, 659.25, 880, 659.25];
-    notes.forEach((f, i) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = "sine"; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, ctx.currentTime + i * 0.12);
-      g.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + i * 0.12 + 0.03);
-      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.12 + 0.5);
-      o.connect(g); g.connect(ctx.destination);
-      o.start(ctx.currentTime + i * 0.12); o.stop(ctx.currentTime + i * 0.12 + 0.55);
-    });
+    const play = () => {
+      const notes = [440, 523.25, 659.25, 880, 659.25];
+      const t0 = ctx.currentTime + 0.02;
+      notes.forEach((f, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "sine"; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t0 + i * 0.12);
+        g.gain.exponentialRampToValueAtTime(0.18, t0 + i * 0.12 + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.12 + 0.6);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(t0 + i * 0.12); o.stop(t0 + i * 0.12 + 0.65);
+      });
+    };
+    if (ctx.state === "suspended") ctx.resume().then(play).catch(play);
+    else play();
   } catch (e) { /* sin sonido, no pasa nada */ }
+}
+
+// Logo de la app. Si la imagen no carga (webview, red), muestra un distintivo
+// "LF" con el acento turquesa, para que nunca se vea roto al abrir.
+function Logo({ size, radius, className }) {
+  const [ok, setOk] = useState(true);
+  const style = { width: size, height: size, borderRadius: radius, fontSize: Math.round(size * 0.38) };
+  if (!ok) return <div className="logo-fallback" style={style}>LF</div>;
+  return <img src="/icon-512.png" alt="LF-Venue" className={className || "logo-img"} style={style} onError={() => setOk(false)} />;
 }
 
 // Campo con estado local: se escribe sin interrupciones y se guarda al salir
@@ -502,7 +520,7 @@ export default function Home() {
   if (phase === "splash") {
     return (
       <div className="splash" onClick={() => { ring(); setPhase(localStorage.getItem("lf-terms") ? (user ? "app" : "auth") : "terms"); }}>
-        <img src="/icon-512.png" alt="LF-Venue" />
+        <Logo size={200} radius={44} className="splash-logo" />
         <div className="name">LF<span>-</span>Venue</div>
         <div className="tag">Gestión de producción · Luz Fría Studio</div>
         <button className="btn" style={{ marginTop: 8 }}>Entrar</button>
@@ -514,7 +532,7 @@ export default function Home() {
   if (phase === "terms") {
     return (
       <div className="app">
-        <div className="header"><img className="logo" src="/icon-512.png" alt="" /><div><div className="title">LF<span>-</span>Venue</div><div className="sub">Términos y Condiciones</div></div></div>
+        <div className="header"><Logo size={40} radius={12} /><div><div className="title">LF<span>-</span>Venue</div><div className="sub">Términos y Condiciones</div></div></div>
         <div className="content">
           <div className="card">
             <h2>Términos y Condiciones</h2>
@@ -539,7 +557,7 @@ export default function Home() {
   if (phase === "auth") {
     return (
       <div className="app">
-        <div className="header"><img className="logo" src="/icon-512.png" alt="" /><div><div className="title">LF<span>-</span>Venue</div><div className="sub">Versión Master · equipo de Luz Fría Studio</div></div></div>
+        <div className="header"><Logo size={40} radius={12} /><div><div className="title">LF<span>-</span>Venue</div><div className="sub">Versión Master · equipo de Luz Fría Studio</div></div></div>
         <div className="content">
           {!supabaseConfigured && (
             <div className="banner warn">Falta conectar Supabase: pon NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY y SUPABASE_SECRET_KEY en Vercel y vuelve a desplegar.</div>
@@ -602,7 +620,7 @@ export default function Home() {
   if (phase === "install") {
     return (
       <div className="app">
-        <div className="header"><img className="logo" src="/icon-512.png" alt="" /><div><div className="title">LF<span>-</span>Venue</div><div className="sub">Instalar en este teléfono</div></div></div>
+        <div className="header"><Logo size={40} radius={12} /><div><div className="title">LF<span>-</span>Venue</div><div className="sub">Instalar en este teléfono</div></div></div>
         <div className="content">
           <div className="card">
             <h2>Instala LF-Venue</h2>
@@ -639,7 +657,7 @@ export default function Home() {
   return (
     <div className="app">
       <div className="header">
-        <img className="logo" src="/icon-512.png" alt="" />
+        <Logo size={40} radius={12} />
         <div><div className="title">LF<span>-</span>Venue</div><div className="sub">{isMaster ? "Master · " : ""}{profile?.name || profile?.email || ""}</div></div>
         <div className="spacer" />
         <span className="pill">Guardado en la nube ✓</span>
